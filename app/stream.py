@@ -20,6 +20,16 @@ class StreamConfig:
     rtsp_url: str = "rtsp://127.0.0.1:8554/cam"
 
 
+def ffmpeg_input_format(pixel_format: str) -> str:
+    """Map V4L2 fourcc names to ffmpeg -input_format values."""
+    fmt = pixel_format.upper()
+    if fmt in ("MJPG", "MJPEG"):
+        return "mjpeg"
+    if fmt == "YUYV":
+        return "yuyv422"
+    return pixel_format.lower()
+
+
 class StreamManager:
     def __init__(self, config: StreamConfig | None = None) -> None:
         self.config = config or StreamConfig()
@@ -40,8 +50,10 @@ class StreamManager:
         return [
             "-hide_banner",
             "-loglevel", "error",
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
             "-f", "v4l2",
-            "-input_format", cfg.pixel_format.lower(),
+            "-input_format", ffmpeg_input_format(cfg.pixel_format),
             "-video_size", f"{cfg.width}x{cfg.height}",
             "-framerate", str(cfg.fps),
             "-i", cfg.device,
@@ -78,6 +90,8 @@ class StreamManager:
         with self._lock:
             if self._preview_proc and self._preview_proc.poll() is None:
                 return self._preview_proc
+            self._stop(self._preview_proc)
+            self._preview_proc = None
             cmd = [
                 "ffmpeg",
                 *self._input_args(),
@@ -92,6 +106,12 @@ class StreamManager:
                 stderr=subprocess.PIPE,
             )
             return self._preview_proc
+
+    def preview_error(self) -> str:
+        proc = self._preview_proc
+        if proc is None or proc.stderr is None:
+            return ""
+        return proc.stderr.read().decode(errors="replace").strip()
 
     def start_rtsp(self) -> subprocess.Popen[bytes]:
         with self._lock:
@@ -131,13 +151,17 @@ class StreamManager:
         proc = self.start_preview()
         assert proc.stdout is not None
         try:
+            await asyncio.sleep(0.3)
             while True:
-                chunk = await asyncio.to_thread(proc.stdout.read, 65536)
-                if not chunk:
-                    break
-                yield chunk
                 if proc.poll() is not None:
                     break
+                chunk = await asyncio.to_thread(proc.stdout.read, 65536)
+                if not chunk:
+                    if proc.poll() is not None:
+                        break
+                    await asyncio.sleep(0.05)
+                    continue
+                yield chunk
         finally:
             self.stop_preview()
 

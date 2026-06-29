@@ -20,8 +20,17 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+function startPreview() {
+  if (!preview.src) {
+    preview.src = "/preview.mjpg";
+  }
+}
+
 function reloadPreview() {
-  preview.src = `/preview.mjpg?t=${Date.now()}`;
+  preview.src = "";
+  requestAnimationFrame(() => {
+    preview.src = `/preview.mjpg?t=${Date.now()}`;
+  });
 }
 
 function renderDeviceInfo(data) {
@@ -142,7 +151,7 @@ async function refresh(reloadVideo = true) {
   renderFormats(state.formats, state.format);
   renderControls(state.controls);
   updateRtspUi(state.stream);
-  if (reloadVideo) reloadPreview();
+  if (reloadVideo) startPreview();
 }
 
 formatSelect.addEventListener("change", async () => {

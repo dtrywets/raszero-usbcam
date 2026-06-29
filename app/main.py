@@ -101,10 +101,11 @@ async def api_set_format(body: FormatUpdate) -> dict:
     streams.stop_all()
     try:
         set_format(streams.config.device, body.width, body.height, body.pixel_format)
+        actual = get_current_format(streams.config.device)
         streams.update_config(
-            width=body.width,
-            height=body.height,
-            pixel_format=body.pixel_format,
+            width=actual["width"],
+            height=actual["height"],
+            pixel_format=actual["pixel_format"],
         )
     except RuntimeError as exc:
         raise HTTPException(400, str(exc)) from exc
