@@ -1,94 +1,104 @@
-# RasZero USB Cam
+# raszero-usbcam
 
-Web-Oberfläche zur Analyse und Steuerung einer UVC-Webcam am Raspberry Pi Zero. MJPEG-Livevorschau im Browser, V4L2-Parameter und Formate per API, RTSP-Streaming über MediaMTX und FFmpeg.
+USB-Webcam-Verwaltung und RTSP-Streaming für einen **Raspberry Pi Zero** mit angeschlossener UVC-Kamera.
+
+Das Projekt liefert eine schlanke Web-Oberfläche zur **Analyse und Steuerung** aller V4L2-Parameter (Helligkeit, Belichtung, Auflösung, …) mit **flinker MJPEG-Livevorschau** sowie einen **RTSP-Stream** für Integration in NVRs, Home Assistant oder VLC.
+
+## Sinn & Ziel
+
+| Aufgabe | Lösung |
+|---------|--------|
+| Kamera erkennen & analysieren | `v4l2-ctl` via REST-API — Formate, Controls, Geräteinfos |
+| Parameter live anpassen | Web-UI mit Slidern, Checkboxen und Menüs |
+| Schnelle Vorschau im Browser | MJPEG-Stream direkt aus der Kamera (`ffmpeg -c copy`, kein Re-Encode) |
+| Dauerhafter Netzwerk-Stream | `ffmpeg` → **MediaMTX** → `rtsp://<host>:8554/cam` |
+
+Der Pi Zero hat wenig RAM (~512 MB). Deshalb: MJPEG passthrough statt Software-Encoding, schlanke Python-App (FastAPI), RTSP nur on-demand.
 
 ## Architektur
 
 ```
-USB-Webcam (UVC)
-       │
-       ▼
-  /dev/video0  ──►  v4l2-ctl / FFmpeg
-       │
-       ├─► FastAPI (uvicorn) :8080
-       │     ├─ Web-UI (HTML/JS)
-       │     ├─ /preview.mjpg (MJPEG)
-       │     └─ REST-API (Geräte, Controls, Format, Stream)
-       │
-       └─► FFmpeg RTSP publish ──► MediaMTX :8554/cam
+USB-Kamera (/dev/video0)
+    │
+    ├── v4l2-ctl ──► FastAPI REST-API ──► Web-UI (:8080)
+    │
+    ├── ffmpeg (copy) ──► MJPEG Preview (/preview.mjpg)
+    │
+    └── ffmpeg (copy) ──► MediaMTX (:8554) ──► RTSP /cam
 ```
-
-| Komponente | Rolle |
-|------------|--------|
-| **FastAPI** | Web-UI, REST-API, MJPEG-Preview via FFmpeg-Pipe |
-| **FFmpeg** | V4L2-Capture, MJPEG-Stream und RTSP-Publishing |
-| **MediaMTX** | RTSP-Server; Pfad `cam` für Publisher (FFmpeg) |
-| **v4l2-ctl** | Geräteliste, Controls, Pixelformate |
 
 ## Hardware
 
-- Raspberry Pi Zero (getestet: armv6, Pi Zero W)
-- UVC-kompatible USB-Webcam (z. B. Logitech C270)
-- Stabiles USB-Verkabelung; Pi Zero hat nur einen Micro-USB-Anschluss (OTG-Adapter oder Hub nötig)
-
-Interne Pi-Kameras (`bcm2835-isp`) werden ignoriert; es wird die externe UVC-Kamera bevorzugt (`/dev/video0`).
+- Raspberry Pi Zero (W/WH), Raspbian/Debian armhf
+- Beliebige **UVC**-Webcam (getestet: Microdia USB Live camera)
+- USB-Ethernet-Adapter empfohlen (RTL8152) — WLAN auf dem Zero ist möglich, aber langsamer
 
 ## Installation
 
-Auf dem Pi (als root oder mit `sudo`):
+Repo auf den Pi kopieren (oder klonen), dann:
 
 ```bash
-git clone git@github.com:dtrywets/raszero-usbcam.git
-cd raszero-usbcam
-sudo ./deploy/install.sh
+sudo bash deploy/install.sh
 ```
 
-Das Skript installiert Pakete (`ffmpeg`, `v4l-utils`, Python venv), MediaMTX (armv6), kopiert die App nach `/opt/raszero-usbcam`, legt systemd-Units an und startet die Dienste. Der ausführende Benutzer (`SUDO_USER` oder Repo-Besitzer) wird der `video`-Gruppe hinzugefügt.
+Das Skript installiert `ffmpeg`, `v4l2-utils`, MediaMTX (armv6-Binary), legt ein Python-venv an und aktiviert zwei systemd-Dienste:
 
-Optional: Umgebungsvariablen in `/etc/systemd/system/raszero-cam.service` oder lokal über `.env` (siehe `.env.example`).
+| Dienst | Beschreibung |
+|--------|--------------|
+| `mediamtx.service` | RTSP-Server auf Port 8554 |
+| `raszero-cam.service` | Web-UI & Kamera-Steuerung auf Port 8080 |
 
-## URLs
+Der ausführende Benutzer wird automatisch erkannt (`SUDO_USER` oder Repo-Besitzer) und der `video`-Gruppe hinzugefügt.
 
-| Dienst | URL |
-|--------|-----|
-| Web-UI | `http://<hostname>:8080/` |
-| MJPEG-Preview | `http://<hostname>:8080/preview.mjpg` |
-| RTSP-Stream | `rtsp://<hostname>:8554/cam` |
+### Update nach Code-Änderung
 
-Standard-Hostname in der Doku: `raszero`. RTSP nutzt TCP (`rtsp_transport=tcp`).
+```bash
+rsync -az --exclude venv --exclude __pycache__ ./ raszero:~/raszero-usbcam/
+ssh raszero 'sudo bash ~/raszero-usbcam/deploy/install.sh'
+```
+
+## Nutzung
+
+| Endpoint | URL |
+|----------|-----|
+| Web-UI | `http://raszero:8080/` |
+| MJPEG-Vorschau | `http://raszero:8080/preview.mjpg` |
+| Kamera-API | `http://raszero:8080/api/camera` |
+| RTSP-Stream | `rtsp://raszero:8554/cam` (erst in UI starten) |
+
+RTSP in VLC öffnen: *Medien → Netzwerkstream öffnen* → URL einfügen.
 
 ## Projektstruktur
 
 ```
 raszero-usbcam/
 ├── app/
-│   ├── main.py          # FastAPI-App, REST-Endpunkte
-│   ├── v4l2.py          # v4l2-ctl Wrapper (Geräte, Controls, Formate)
-│   ├── stream.py        # FFmpeg MJPEG/RTSP StreamManager
+│   ├── main.py          # FastAPI — REST-API & Web-UI
+│   ├── v4l2.py          # V4L2-Steuerung via v4l2-ctl
+│   ├── stream.py        # ffmpeg MJPEG-Preview & RTSP
 │   ├── requirements.txt
-│   └── static/          # Web-UI (HTML, CSS, JS)
+│   └── static/          # Web-Frontend
 ├── config/
-│   └── mediamtx.yml     # MediaMTX-Konfiguration (RTSP :8554, Pfad cam)
+│   └── mediamtx.yml     # MediaMTX-Konfiguration
 ├── deploy/
 │   ├── install.sh       # Installation auf dem Pi
 │   ├── mediamtx.service
 │   └── raszero-cam.service
-├── .env.example         # Optionale Umgebungsvariablen (keine Secrets)
 └── raszero-usbcam.code-workspace
 ```
 
-## Lokale Entwicklung
+## Konfiguration
 
-```bash
-cd app
-python3 -m venv ../venv
-../venv/bin/pip install -r requirements.txt
-export RASZERO_DEVICE=/dev/video0
-../venv/bin/uvicorn main:app --reload --host 0.0.0.0 --port 8080
-```
+Umgebungsvariablen (in `raszero-cam.service`):
 
-MediaMTX muss für RTSP separat laufen (`mediamtx ../config/mediamtx.yml`).
+| Variable | Default | Bedeutung |
+|----------|---------|-----------|
+| `RASZERO_DEVICE` | `/dev/video0` | V4L2-Gerätepfad |
+| `RASZERO_PORT` | `8080` | Web-UI-Port |
+| `RASZERO_HOST` | `raszero` | Hostname in RTSP-URLs |
+
+Keine Secrets nötig — alles läuft im lokalen Netzwerk ohne Authentifizierung.
 
 ## Lizenz
 
-Projektcode ohne explizite Lizenz — Nutzung im privaten Kontext.
+MIT — frei verwendbar, ohne Garantie.

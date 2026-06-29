@@ -7,13 +7,10 @@ set -euo pipefail
 APP_DIR="/opt/raszero-usbcam"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MEDIAMTX_VERSION="1.15.3"
+PI_USER="${SUDO_USER:-$(stat -c '%U' "$REPO_DIR")}"
+PI_GROUP="$(id -gn "$PI_USER" 2>/dev/null || echo "$PI_USER")"
+PI_HOST="$(hostname -s 2>/dev/null || echo raszero)"
 
-# Pi-Benutzer: wer sudo ausführt, sonst Besitzer des Repo-Verzeichnisses
-if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
-  PI_USER="$SUDO_USER"
-else
-  PI_USER="$(stat -c '%U' "$REPO_DIR")"
-fi
 if [[ -z "$PI_USER" || "$PI_USER" == "root" ]]; then
   PI_USER="$(logname 2>/dev/null || whoami)"
 fi
@@ -68,6 +65,6 @@ systemctl restart mediamtx.service
 systemctl restart raszero-cam.service
 
 echo "==> Fertig"
-echo "Web-UI:  http://raszero:8080/"
-echo "RTSP:    rtsp://raszero:8554/cam"
+echo "Web-UI:  http://${PI_HOST}:8080/"
+echo "RTSP:    rtsp://${PI_HOST}:8554/cam"
 systemctl --no-pager --full status mediamtx.service raszero-cam.service | sed -n '1,12p'

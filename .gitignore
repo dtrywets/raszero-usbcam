@@ -1,24 +1,26 @@
 # Python
 __pycache__/
 *.py[cod]
-*.pyc
-*.pyo
 *.egg-info/
 .venv/
 venv/
+dist/
+build/
+
+# Secrets & lokale Konfiguration
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+id_rsa*
 
 # Editor / OS
+.DS_Store
 .idea/
 .vscode/
 *.swp
-*~
-.DS_Store
-Thumbs.db
 
-# Build / deploy artifacts on target host
+# Logs & Temp
 *.log
-dist/
-build/
+/tmp/
