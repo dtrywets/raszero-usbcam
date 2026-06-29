@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from stream import StreamConfig, StreamManager
-from uvc_xu import get_led, set_led
+from uvc_xu import scan_controls, set_control_bytes
 from v4l2 import (
     get_current_format,
     get_device_info,
@@ -26,6 +26,16 @@ from v4l2 import (
 
 DEVICE = os.environ.get("RASZERO_DEVICE", "")
 streams = StreamManager()
+_xu_cache: list[dict] = []
+
+
+def refresh_xu_cache(device: str) -> list[dict]:
+    global _xu_cache
+    try:
+        _xu_cache = [c.to_dict() for c in scan_controls(device)]
+    except OSError:
+        _xu_cache = []
+    return _xu_cache
 
 
 class ControlUpdate(BaseModel):
@@ -60,6 +70,7 @@ async def lifespan(_app: FastAPI):
         preview_height=480,
         preview_fps=15,
     )
+    refresh_xu_cache(device)
     yield
     streams.stop_all()
 
@@ -83,18 +94,13 @@ async def api_devices() -> list[dict]:
 @app.get("/api/camera")
 async def api_camera() -> dict:
     device = streams.config.device
-    led = None
-    try:
-        led = get_led(device)
-    except OSError:
-        pass
     return {
         "info": get_device_info(device),
         "format": get_current_format(device),
         "controls": [c.to_dict() for c in list_controls(device)],
         "formats": [f.to_dict() for f in list_formats(device)],
         "stream": streams.status(),
-        "led": led,
+        "xu_controls": _xu_cache or refresh_xu_cache(device),
     }
 
 
@@ -123,25 +129,35 @@ async def api_set_format(body: FormatUpdate) -> dict:
     }
 
 
-class LedUpdate(BaseModel):
-    on: bool
-    brightness: int | None = Field(default=None, ge=0, le=255)
+class XuUpdate(BaseModel):
+    unit: int = Field(ge=1, le=255)
+    selector: int = Field(ge=1, le=255)
+    value_bytes: list[int]
 
 
-@app.get("/api/led")
-async def api_get_led() -> dict:
+@app.get("/api/xu")
+async def api_xu_list() -> list[dict]:
+    return refresh_xu_cache(streams.config.device)
+
+
+@app.post("/api/xu/rescan")
+async def api_xu_rescan() -> list[dict]:
+    return refresh_xu_cache(streams.config.device)
+
+
+@app.patch("/api/xu")
+async def api_xu_set(body: XuUpdate) -> dict:
     try:
-        return get_led(streams.config.device)
-    except OSError as exc:
-        raise HTTPException(501, f"LED-Steuerung nicht verfügbar: {exc}") from exc
-
-
-@app.patch("/api/led")
-async def api_set_led(body: LedUpdate) -> dict:
-    try:
-        return set_led(streams.config.device, body.on, body.brightness)
-    except OSError as exc:
-        raise HTTPException(501, f"LED-Steuerung nicht verfügbar: {exc}") from exc
+        result = set_control_bytes(
+            streams.config.device,
+            body.unit,
+            body.selector,
+            body.value_bytes,
+        )
+        refresh_xu_cache(streams.config.device)
+        return result
+    except (OSError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.patch("/api/stream/settings")

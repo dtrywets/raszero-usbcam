@@ -22,10 +22,6 @@
           RTSP-Auflösung
           <select id="format-select"></select>
         </label>
-        <label class="led-toggle">
-          <input id="led-on" type="checkbox">
-          Leuchtring
-        </label>
         <button id="rtsp-toggle" type="button">RTSP starten</button>
         <code id="rtsp-url"></code>
       </div>
@@ -35,6 +31,15 @@
     <section class="controls-panel">
       <h2>Kamera-Parameter</h2>
       <form id="controls-form"></form>
+
+      <div class="xu-section">
+        <div class="xu-header">
+          <h2>UVC Extensions</h2>
+          <button id="xu-rescan" type="button">Neu scannen</button>
+        </div>
+        <p class="hint">Automatisch erkannte Hersteller-Controls (z. B. Leuchtring). Leuchtring oft <code>u3_s2</code> Byte 2/3.</p>
+        <div id="xu-controls"></div>
+      </div>
     </section>
   </main>
 

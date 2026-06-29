@@ -4,7 +4,8 @@ const controlsForm = document.getElementById("controls-form");
 const formatSelect = document.getElementById("format-select");
 const rtspToggle = document.getElementById("rtsp-toggle");
 const rtspUrl = document.getElementById("rtsp-url");
-const ledOn = document.getElementById("led-on");
+const xuControls = document.getElementById("xu-controls");
+const xuRescan = document.getElementById("xu-rescan");
 
 let state = null;
 let debounceTimers = new Map();
@@ -59,11 +60,6 @@ function renderFormats(formats, stream) {
     }
     formatSelect.appendChild(opt);
   }
-}
-
-function renderLed(led) {
-  if (!led || !ledOn) return;
-  ledOn.checked = Boolean(led.on);
 }
 
 function renderControl(ctrl) {
@@ -144,6 +140,95 @@ function renderControls(controls) {
   }
 }
 
+async function setXuControl(ctrl, valueBytes) {
+  await api("/api/xu", {
+    method: "PATCH",
+    body: JSON.stringify({
+      unit: ctrl.unit,
+      selector: ctrl.selector,
+      value_bytes: valueBytes,
+    }),
+  });
+  await refresh(false);
+}
+
+function renderXuControls(controls) {
+  xuControls.innerHTML = "";
+  if (!controls?.length) {
+    xuControls.textContent = "Keine Extension-Controls gefunden.";
+    return;
+  }
+
+  for (const ctrl of controls) {
+    const card = document.createElement("div");
+    card.className = "xu-card";
+
+    const title = document.createElement("h3");
+    title.textContent = ctrl.id;
+    card.appendChild(title);
+
+    const meta = document.createElement("div");
+    meta.className = "xu-meta";
+    meta.textContent = `${ctrl.size} Byte · ${ctrl.writable ? "schreibbar" : "nur lesen"} · ${ctrl.value_hex}`;
+    card.appendChild(meta);
+
+    if (ctrl.writable && ctrl.size <= 16) {
+      const bytesWrap = document.createElement("div");
+      bytesWrap.className = "xu-bytes";
+      const inputs = [];
+
+      ctrl.value_bytes.forEach((val, idx) => {
+        const wrap = document.createElement("div");
+        wrap.className = "xu-byte";
+        const lbl = document.createElement("label");
+        lbl.textContent = `B${idx}`;
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = 0;
+        input.max = 255;
+        input.value = val;
+        input.disabled = !ctrl.writable;
+        input.addEventListener("change", async () => {
+          const next = inputs.map((el) => Number(el.value) & 255);
+          try {
+            await setXuControl(ctrl, next);
+          } catch (err) {
+            console.error(err);
+            await refresh(false);
+          }
+        });
+        wrap.appendChild(lbl);
+        wrap.appendChild(input);
+        bytesWrap.appendChild(wrap);
+        inputs.push(input);
+      });
+      card.appendChild(bytesWrap);
+
+      if (ctrl.id === "u3_s2") {
+        const actions = document.createElement("div");
+        actions.className = "xu-actions";
+        const offBtn = document.createElement("button");
+        offBtn.type = "button";
+        offBtn.textContent = "Leuchtring aus";
+        offBtn.addEventListener("click", () =>
+          setXuControl(ctrl, [0x3c, 0, 0, 0, 0x15, 0x16, 0x05, 0]),
+        );
+        const onBtn = document.createElement("button");
+        onBtn.type = "button";
+        onBtn.textContent = "Leuchtring an";
+        onBtn.addEventListener("click", () =>
+          setXuControl(ctrl, [0x3c, 0, 0x0c, 0x0c, 0x15, 0x16, 0x05, 0]),
+        );
+        actions.appendChild(offBtn);
+        actions.appendChild(onBtn);
+        card.appendChild(actions);
+      }
+    }
+
+    xuControls.appendChild(card);
+  }
+}
+
 function updateRtspUi(stream) {
   const active = stream.rtsp_active;
   rtspToggle.textContent = active ? "RTSP stoppen" : "RTSP starten";
@@ -156,7 +241,7 @@ async function refresh(reloadVideo = true) {
   renderDeviceInfo(state);
   renderFormats(state.formats, state.stream);
   renderControls(state.controls);
-  renderLed(state.led);
+  renderXuControls(state.xu_controls);
   updateRtspUi(state.stream);
   if (reloadVideo) startPreview();
 }
@@ -167,21 +252,10 @@ formatSelect.addEventListener("change", async () => {
   await refresh(false);
 });
 
-ledOn.addEventListener("change", async () => {
-  try {
-    await api("/api/led", {
-      method: "PATCH",
-      body: JSON.stringify({ on: ledOn.checked }),
-    });
-  } catch (err) {
-    console.error(err);
-    await refresh(false);
-  }
+xuRescan.addEventListener("click", async () => {
+  await api("/api/xu/rescan", { method: "POST" });
+  await refresh(false);
 });
-
-function streamsStopPreview() {
-  preview.src = "";
-}
 
 rtspToggle.addEventListener("click", async () => {
   const active = state?.stream?.rtsp_active;
