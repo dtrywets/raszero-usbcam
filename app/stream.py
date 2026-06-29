@@ -17,6 +17,9 @@ class StreamConfig:
     height: int = 480
     pixel_format: str = "MJPG"
     fps: int = 30
+    preview_width: int = 640
+    preview_height: int = 480
+    preview_fps: int = 15
     rtsp_url: str = "rtsp://127.0.0.1:8554/cam"
 
 
@@ -45,8 +48,12 @@ class StreamManager:
     def rtsp_active(self) -> bool:
         return self._rtsp_proc is not None and self._rtsp_proc.poll() is None
 
-    def _input_args(self) -> list[str]:
+    def _input_args(self, *, preview: bool = False) -> list[str]:
         cfg = self.config
+        if preview:
+            w, h, fps = cfg.preview_width, cfg.preview_height, cfg.preview_fps
+        else:
+            w, h, fps = cfg.width, cfg.height, cfg.fps
         return [
             "-hide_banner",
             "-loglevel", "error",
@@ -54,8 +61,8 @@ class StreamManager:
             "-flags", "low_delay",
             "-f", "v4l2",
             "-input_format", ffmpeg_input_format(cfg.pixel_format),
-            "-video_size", f"{cfg.width}x{cfg.height}",
-            "-framerate", str(cfg.fps),
+            "-video_size", f"{w}x{h}",
+            "-framerate", str(fps),
             "-i", cfg.device,
         ]
 
@@ -94,7 +101,7 @@ class StreamManager:
             self._preview_proc = None
             cmd = [
                 "ffmpeg",
-                *self._input_args(),
+                *self._input_args(preview=True),
                 "-an",
                 "-c:v", "copy",
                 "-f", "mpjpeg",
@@ -124,7 +131,7 @@ class StreamManager:
 
             cmd = [
                 "ffmpeg",
-                *self._input_args(),
+                *self._input_args(preview=False),
                 "-an",
                 "-c:v", "copy",
                 "-f", "rtsp",
@@ -175,6 +182,9 @@ class StreamManager:
             "height": cfg.height,
             "pixel_format": cfg.pixel_format,
             "fps": cfg.fps,
+            "preview_width": cfg.preview_width,
+            "preview_height": cfg.preview_height,
+            "preview_fps": cfg.preview_fps,
             "rtsp_url": cfg.rtsp_url,
             "rtsp_public_url": cfg.rtsp_url.replace("127.0.0.1", os.environ.get("RASZERO_HOST", "raszero")),
         }

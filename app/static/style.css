@@ -79,6 +79,20 @@ main {
   margin-top: 1rem;
 }
 
+.hint {
+  margin: 0.75rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.led-toggle {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.5rem !important;
+  color: var(--text);
+  cursor: pointer;
+}
+
 label {
   display: flex;
   flex-direction: column;

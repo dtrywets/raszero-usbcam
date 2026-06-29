@@ -4,6 +4,7 @@ const controlsForm = document.getElementById("controls-form");
 const formatSelect = document.getElementById("format-select");
 const rtspToggle = document.getElementById("rtsp-toggle");
 const rtspUrl = document.getElementById("rtsp-url");
+const ledOn = document.getElementById("led-on");
 
 let state = null;
 let debounceTimers = new Map();
@@ -39,7 +40,7 @@ function renderDeviceInfo(data) {
   deviceInfo.textContent = `${info.card} · ${info.device} · ${fmt.width}x${fmt.height} ${fmt.pixel_format}`;
 }
 
-function renderFormats(formats, current) {
+function renderFormats(formats, stream) {
   formatSelect.innerHTML = "";
   for (const f of formats) {
     const opt = document.createElement("option");
@@ -50,14 +51,19 @@ function renderFormats(formats, current) {
     });
     opt.textContent = f.label;
     if (
-      f.width === current.width &&
-      f.height === current.height &&
-      f.pixel_format === current.pixel_format
+      f.width === stream.width &&
+      f.height === stream.height &&
+      f.pixel_format === stream.pixel_format
     ) {
       opt.selected = true;
     }
     formatSelect.appendChild(opt);
   }
+}
+
+function renderLed(led) {
+  if (!led || !ledOn) return;
+  ledOn.checked = Boolean(led.on);
 }
 
 function renderControl(ctrl) {
@@ -148,18 +154,29 @@ function updateRtspUi(stream) {
 async function refresh(reloadVideo = true) {
   state = await api("/api/camera");
   renderDeviceInfo(state);
-  renderFormats(state.formats, state.format);
+  renderFormats(state.formats, state.stream);
   renderControls(state.controls);
+  renderLed(state.led);
   updateRtspUi(state.stream);
   if (reloadVideo) startPreview();
 }
 
 formatSelect.addEventListener("change", async () => {
   const fmt = JSON.parse(formatSelect.value);
-  streamsStopPreview();
   await api("/api/format", { method: "POST", body: JSON.stringify(fmt) });
-  reloadPreview();
   await refresh(false);
+});
+
+ledOn.addEventListener("change", async () => {
+  try {
+    await api("/api/led", {
+      method: "PATCH",
+      body: JSON.stringify({ on: ledOn.checked }),
+    });
+  } catch (err) {
+    console.error(err);
+    await refresh(false);
+  }
 });
 
 function streamsStopPreview() {

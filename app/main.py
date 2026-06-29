@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from stream import StreamConfig, StreamManager
+from uvc_xu import get_led, set_led
 from v4l2 import (
     get_current_format,
     get_device_info,
@@ -48,12 +49,16 @@ class StreamSettings(BaseModel):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     device = pick_capture_device(DEVICE or None)
+    set_format(device, 640, 480, "MJPG")
     fmt = get_current_format(device)
     streams.update_config(
         device=device,
         width=fmt.get("width") or 640,
         height=fmt.get("height") or 480,
         pixel_format=fmt.get("pixel_format") or "MJPG",
+        preview_width=640,
+        preview_height=480,
+        preview_fps=15,
     )
     yield
     streams.stop_all()
@@ -78,12 +83,18 @@ async def api_devices() -> list[dict]:
 @app.get("/api/camera")
 async def api_camera() -> dict:
     device = streams.config.device
+    led = None
+    try:
+        led = get_led(device)
+    except OSError:
+        pass
     return {
         "info": get_device_info(device),
         "format": get_current_format(device),
         "controls": [c.to_dict() for c in list_controls(device)],
         "formats": [f.to_dict() for f in list_formats(device)],
         "stream": streams.status(),
+        "led": led,
     }
 
 
@@ -98,18 +109,39 @@ async def api_set_control(body: ControlUpdate) -> dict:
 
 @app.post("/api/format")
 async def api_set_format(body: FormatUpdate) -> dict:
-    streams.stop_all()
+    """Setzt Zielauflösung für RTSP — Vorschau bleibt bei 640x480."""
+    streams.stop_rtsp()
+    streams.update_config(
+        width=body.width,
+        height=body.height,
+        pixel_format=body.pixel_format,
+    )
+    return {
+        "ok": True,
+        "format": get_current_format(streams.config.device),
+        "stream": streams.status(),
+    }
+
+
+class LedUpdate(BaseModel):
+    on: bool
+    brightness: int | None = Field(default=None, ge=0, le=255)
+
+
+@app.get("/api/led")
+async def api_get_led() -> dict:
     try:
-        set_format(streams.config.device, body.width, body.height, body.pixel_format)
-        actual = get_current_format(streams.config.device)
-        streams.update_config(
-            width=actual["width"],
-            height=actual["height"],
-            pixel_format=actual["pixel_format"],
-        )
-    except RuntimeError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    return {"ok": True, "format": get_current_format(streams.config.device)}
+        return get_led(streams.config.device)
+    except OSError as exc:
+        raise HTTPException(501, f"LED-Steuerung nicht verfügbar: {exc}") from exc
+
+
+@app.patch("/api/led")
+async def api_set_led(body: LedUpdate) -> dict:
+    try:
+        return set_led(streams.config.device, body.on, body.brightness)
+    except OSError as exc:
+        raise HTTPException(501, f"LED-Steuerung nicht verfügbar: {exc}") from exc
 
 
 @app.patch("/api/stream/settings")
@@ -125,6 +157,13 @@ async def api_stream_status() -> dict:
 
 @app.post("/api/stream/rtsp/start")
 async def api_rtsp_start() -> dict:
+    device = streams.config.device
+    cfg = streams.config
+    streams.stop_all()
+    try:
+        set_format(device, cfg.width, cfg.height, cfg.pixel_format)
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
     proc = streams.start_rtsp()
     if proc.poll() is not None:
         err = (proc.stderr.read() if proc.stderr else b"").decode(errors="replace")
@@ -135,6 +174,10 @@ async def api_rtsp_start() -> dict:
 @app.post("/api/stream/rtsp/stop")
 async def api_rtsp_stop() -> dict:
     streams.stop_rtsp()
+    try:
+        set_format(streams.config.device, 640, 480, "MJPG")
+    except RuntimeError:
+        pass
     return streams.status()
 
 

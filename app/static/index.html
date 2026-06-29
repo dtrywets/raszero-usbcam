@@ -19,12 +19,17 @@
       </div>
       <div class="stream-actions">
         <label>
-          Auflösung
+          RTSP-Auflösung
           <select id="format-select"></select>
+        </label>
+        <label class="led-toggle">
+          <input id="led-on" type="checkbox">
+          Leuchtring
         </label>
         <button id="rtsp-toggle" type="button">RTSP starten</button>
         <code id="rtsp-url"></code>
       </div>
+      <p class="hint">Vorschau: 640×480 @ 15 fps — hohe RTSP-Auflösungen nur beim Streamen.</p>
     </section>
 
     <section class="controls-panel">
