@@ -104,6 +104,15 @@ def run_v4l2(device: str, *args: str) -> str:
     return result.stdout
 
 
+def is_capture_device(device: str) -> bool:
+    """True wenn das Knoten Video-Capture kann (kein reines Metadata-Device)."""
+    try:
+        output = run_v4l2(device, "--list-formats-ext")
+    except RuntimeError:
+        return False
+    return "Size: Discrete" in output
+
+
 def list_devices() -> list[dict]:
     output = subprocess.run(
         ["v4l2-ctl", "--list-devices"],
@@ -136,12 +145,34 @@ def list_devices() -> list[dict]:
     return devices
 
 
+def list_capture_devices() -> list[dict]:
+    """Alle angeschlossenen Capture-Kameras (ohne Pi-ISP, ohne Metadata-Knoten)."""
+    capture: list[dict] = []
+    for entry in list_devices():
+        device = entry["device"]
+        if not is_capture_device(device):
+            continue
+        info = get_device_info(device)
+        capture.append(
+            {
+                "name": entry["name"],
+                "device": device,
+                "card": info["card"],
+                "bus_info": info["bus_info"],
+            }
+        )
+    return capture
+
+
 def pick_capture_device(preferred: str | None = None) -> str:
-    if preferred:
-        return preferred
-    devices = list_devices()
+    devices = list_capture_devices()
     if not devices:
         raise RuntimeError("Keine V4L2-Kamera gefunden")
+    if preferred:
+        for entry in devices:
+            if entry["device"] == preferred:
+                return preferred
+        raise RuntimeError(f"Kamera {preferred} nicht gefunden oder kein Capture-Device")
     return devices[0]["device"]
 
 

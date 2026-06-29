@@ -8,7 +8,7 @@ Das Projekt liefert eine schlanke Web-Oberfläche zur **Analyse und Steuerung** 
 
 | Aufgabe | Lösung |
 |---------|--------|
-| Kamera erkennen & analysieren | `v4l2-ctl` via REST-API — Formate, Controls, Geräteinfos |
+| Kamera erkennen & analysieren | `v4l2-ctl` via REST-API — Formate, Controls, Geräteinfos; **mehrere USB-Cams**, Umschalten in der Web-UI |
 | Parameter live anpassen | Web-UI mit Slidern, Checkboxen und Menüs |
 | Schnelle Vorschau im Browser | MJPEG-Stream direkt aus der Kamera (`ffmpeg -c copy`, kein Re-Encode) |
 | Dauerhafter Netzwerk-Stream | `ffmpeg` → **MediaMTX** → `rtsp://<host>:8554/cam` |
@@ -93,9 +93,11 @@ Umgebungsvariablen (in `raszero-cam.service`):
 
 | Variable | Default | Bedeutung |
 |----------|---------|-----------|
-| `RASZERO_DEVICE` | `/dev/video0` | V4L2-Gerätepfad |
+| `RASZERO_DEVICE` | `/dev/video0` | Start-Kamera (Capture-Device); weitere Cams in der Web-UI wählbar |
 | `RASZERO_PORT` | `8080` | Web-UI-Port |
 | `RASZERO_HOST` | `raszero` | Hostname in RTSP-URLs |
+| `RASZERO_OSD_TIMESTAMP` | `1` | Datum/Uhrzeit links oben (`0` zum Abschalten) |
+| `RASZERO_OSD_TIMESTAMP_FORMAT` | `%Y-%m-%d %H:%M:%S` | strftime-Format für ffmpeg drawtext |
 
 Keine Secrets nötig — alles läuft im lokalen Netzwerk ohne Authentifizierung.
 

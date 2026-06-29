@@ -9,7 +9,13 @@
 <body>
   <header>
     <h1>RasZero USB Cam</h1>
-    <p id="device-info">Lade Kamera …</p>
+    <div class="header-bar">
+      <label class="device-select">
+        Kamera
+        <select id="device-select"></select>
+      </label>
+      <p id="device-info">Lade Kamera …</p>
+    </div>
   </header>
 
   <main>
@@ -25,7 +31,7 @@
         <button id="rtsp-toggle" type="button">RTSP starten</button>
         <code id="rtsp-url"></code>
       </div>
-      <p class="hint">Vorschau: 640×480 @ 15 fps — hohe RTSP-Auflösungen nur beim Streamen.</p>
+      <p class="hint">Vorschau: 640×480 @ 15 fps — hohe RTSP-Auflösungen nur beim Streamen. Datum/Uhrzeit links oben (OSD).</p>
     </section>
 
     <section class="controls-panel">
@@ -34,10 +40,22 @@
 
       <div class="xu-section">
         <div class="xu-header">
+          <h2>Leuchtring (Sonix GPIO)</h2>
+        </div>
+        <p class="hint">
+          Sonix <code>GPIO_CTRL</code> (u4_s8) — nur wenn die Cam GPIO an LEDs verdrahtet hat.
+          Fehlt GPIO oder passiert nichts: Cam-spezifisch (z.&nbsp;B. Vitade nur Touch-Ring).
+        </p>
+        <p id="gpio-status" class="hint gpio-status"></p>
+        <div id="gpio-panel" class="gpio-panel"></div>
+      </div>
+
+      <div class="xu-section">
+        <div class="xu-header">
           <h2>UVC Extensions</h2>
           <button id="xu-rescan" type="button">Neu scannen</button>
         </div>
-        <p class="hint">Automatisch erkannte Hersteller-Controls. Leuchtring: <code>u4_s2</code> (B0=Stufe, B1=Helligkeit).</p>
+        <p class="hint">Automatisch erkannte Sonix-Controls mit korrektem Lese-/Schreibprotokoll.</p>
         <div id="xu-controls"></div>
       </div>
     </section>

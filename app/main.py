@@ -4,38 +4,62 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
-from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from stream import StreamConfig, StreamManager
-from uvc_xu import scan_controls, set_control_bytes
+from stream import StreamManager
 from v4l2 import (
     get_current_format,
     get_device_info,
+    list_capture_devices,
     list_controls,
-    list_devices,
     list_formats,
     pick_capture_device,
     set_control,
     set_format,
 )
+from uvc_xu import get_gpio, is_sonix_device, scan_controls, set_control_bytes, set_gpio, usb_ids_for_device
 
 DEVICE = os.environ.get("RASZERO_DEVICE", "")
 streams = StreamManager()
-_xu_cache: list[dict] = []
+_xu_cache: dict[str, list[dict]] = {}
 
 
 def refresh_xu_cache(device: str) -> list[dict]:
-    global _xu_cache
     try:
-        _xu_cache = [c.to_dict() for c in scan_controls(device)]
+        _xu_cache[device] = [c.to_dict() for c in scan_controls(device)]
     except OSError:
-        _xu_cache = []
-    return _xu_cache
+        _xu_cache[device] = []
+    return _xu_cache[device]
+
+
+def get_xu_cache(device: str) -> list[dict]:
+    if device not in _xu_cache:
+        return refresh_xu_cache(device)
+    return _xu_cache[device]
+
+
+def activate_device(device: str) -> None:
+    streams.stop_all()
+    try:
+        set_format(device, 640, 480, "MJPG")
+    except RuntimeError:
+        pass
+    fmt = get_current_format(device)
+    streams.update_config(
+        device=device,
+        width=fmt.get("width") or 640,
+        height=fmt.get("height") or 480,
+        pixel_format=fmt.get("pixel_format") or "MJPG",
+        preview_width=640,
+        preview_height=480,
+        preview_fps=15,
+    )
+    refresh_xu_cache(device)
+    streams.ensure_preview()
 
 
 class ControlUpdate(BaseModel):
@@ -58,20 +82,7 @@ class StreamSettings(BaseModel):
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    device = pick_capture_device(DEVICE or None)
-    set_format(device, 640, 480, "MJPG")
-    fmt = get_current_format(device)
-    streams.update_config(
-        device=device,
-        width=fmt.get("width") or 640,
-        height=fmt.get("height") or 480,
-        pixel_format=fmt.get("pixel_format") or "MJPG",
-        preview_width=640,
-        preview_height=480,
-        preview_fps=15,
-    )
-    refresh_xu_cache(device)
-    streams.ensure_preview()
+    activate_device(pick_capture_device(DEVICE or None))
     yield
     streams.stop_all()
 
@@ -89,20 +100,53 @@ async def index() -> HTMLResponse:
 
 @app.get("/api/devices")
 async def api_devices() -> list[dict]:
-    return list_devices()
+    active = streams.config.device
+    result: list[dict] = []
+    for entry in list_capture_devices():
+        device = entry["device"]
+        ids = usb_ids_for_device(device)
+        result.append(
+            {
+                **entry,
+                "active": device == active,
+                "usb_id": f"{ids[0]}:{ids[1]}" if ids else None,
+                "is_sonix": is_sonix_device(device) if ids else False,
+            }
+        )
+    return result
 
 
 @app.get("/api/camera")
 async def api_camera() -> dict:
     device = streams.config.device
+    gpio = None
+    try:
+        gpio = get_gpio(device)
+    except OSError:
+        pass
     return {
         "info": get_device_info(device),
         "format": get_current_format(device),
         "controls": [c.to_dict() for c in list_controls(device)],
         "formats": [f.to_dict() for f in list_formats(device)],
         "stream": streams.status(),
-        "xu_controls": _xu_cache or refresh_xu_cache(device),
+        "xu_controls": get_xu_cache(device),
+        "gpio": gpio,
+        "devices": await api_devices(),
     }
+
+
+class DeviceSelect(BaseModel):
+    device: str = Field(min_length=1)
+
+
+@app.post("/api/device")
+async def api_select_device(body: DeviceSelect) -> dict:
+    known = {d["device"] for d in list_capture_devices()}
+    if body.device not in known:
+        raise HTTPException(404, f"Gerät {body.device} nicht gefunden")
+    activate_device(body.device)
+    return await api_camera()
 
 
 @app.patch("/api/controls")
@@ -134,6 +178,27 @@ class XuUpdate(BaseModel):
     unit: int = Field(ge=1, le=255)
     selector: int = Field(ge=1, le=255)
     value_bytes: list[int]
+
+
+class GpioUpdate(BaseModel):
+    enable: int = Field(ge=0, le=255)
+    output: int = Field(ge=0, le=255)
+
+
+@app.get("/api/gpio")
+async def api_get_gpio() -> dict:
+    try:
+        return get_gpio(streams.config.device)
+    except OSError as exc:
+        raise HTTPException(501, str(exc)) from exc
+
+
+@app.patch("/api/gpio")
+async def api_set_gpio(body: GpioUpdate) -> dict:
+    try:
+        return set_gpio(streams.config.device, body.enable, body.output)
+    except OSError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/xu")

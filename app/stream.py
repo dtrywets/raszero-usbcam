@@ -34,6 +34,59 @@ def ffmpeg_input_format(pixel_format: str) -> str:
     return pixel_format.lower()
 
 
+def _osd_enabled() -> bool:
+    return os.environ.get("RASZERO_OSD_TIMESTAMP", "1").lower() not in ("0", "false", "no")
+
+
+def _font_path() -> str:
+    for path in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+    ):
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
+def drawtext_filter() -> str | None:
+    """ffmpeg drawtext-Filter für Datum/Uhrzeit links oben."""
+    if not _osd_enabled():
+        return None
+    fmt = os.environ.get("RASZERO_OSD_TIMESTAMP_FORMAT", "%Y-%m-%d %H:%M:%S")
+    fmt_ff = fmt.replace(":", r"\:")
+    font = _font_path()
+    font_spec = f"fontfile={font}" if font else "font=Sans"
+    text = f"%{{localtime\\:{fmt_ff}}}"
+    return (
+        f"drawtext={font_spec}:text='{text}':x=10:y=10:fontsize=16:fontcolor=white:"
+        f"box=1:boxcolor=black@0.55:boxborderw=4"
+    )
+
+
+def ffmpeg_output_args(pixel_format: str) -> list[str]:
+    """Video-Ausgabe inkl. optionalem OSD (erfordert Re-Encode statt copy)."""
+    vf = drawtext_filter()
+    if vf is None:
+        return ["-an", "-c:v", "copy"]
+    pix = pixel_format.upper()
+    if pix == "H264":
+        return [
+            "-an",
+            "-vf",
+            vf,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-pix_fmt",
+            "yuv420p",
+        ]
+    return ["-an", "-vf", vf, "-c:v", "mjpeg", "-q:v", "5"]
+
+
 class PreviewBroadcaster:
     """Hält ffmpeg dauerhaft warm und verteilt MJPEG an mehrere HTTP-Clients."""
 
@@ -46,9 +99,11 @@ class PreviewBroadcaster:
         self._latest_event = threading.Event()
         self._subscribers: set[asyncio.Queue[bytes | None]] = set()
         self._input_args: list[str] = []
+        self._output_args: list[str] = []
 
-    def configure(self, input_args: list[str]) -> None:
+    def configure(self, input_args: list[str], output_args: list[str]) -> None:
         self._input_args = input_args
+        self._output_args = output_args
 
     @property
     def active(self) -> bool:
@@ -63,8 +118,7 @@ class PreviewBroadcaster:
             cmd = [
                 "ffmpeg",
                 *self._input_args,
-                "-an",
-                "-c:v", "copy",
+                *self._output_args,
                 "-f", "mpjpeg",
                 "pipe:1",
             ]
@@ -193,7 +247,11 @@ class StreamManager:
     def ensure_preview(self) -> None:
         if self.rtsp_active:
             return
-        self._preview.configure(self._input_args(preview=True))
+        cfg = self.config
+        self._preview.configure(
+            self._input_args(preview=True),
+            ffmpeg_output_args(cfg.pixel_format),
+        )
         self._preview.start()
 
     def stop_preview(self) -> None:
@@ -216,8 +274,7 @@ class StreamManager:
             cmd = [
                 "ffmpeg",
                 *self._input_args(preview=False),
-                "-an",
-                "-c:v", "copy",
+                *ffmpeg_output_args(self.config.pixel_format),
                 "-f", "rtsp",
                 "-rtsp_transport", "tcp",
                 self.config.rtsp_url,
@@ -265,4 +322,5 @@ class StreamManager:
             "rtsp_public_url": cfg.rtsp_url.replace(
                 "127.0.0.1", os.environ.get("RASZERO_HOST", "raszero")
             ),
+            "osd_timestamp": _osd_enabled(),
         }

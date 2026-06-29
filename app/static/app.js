@@ -1,4 +1,5 @@
 const preview = document.getElementById("preview");
+const deviceSelect = document.getElementById("device-select");
 const deviceInfo = document.getElementById("device-info");
 const controlsForm = document.getElementById("controls-form");
 const formatSelect = document.getElementById("format-select");
@@ -6,6 +7,9 @@ const rtspToggle = document.getElementById("rtsp-toggle");
 const rtspUrl = document.getElementById("rtsp-url");
 const xuControls = document.getElementById("xu-controls");
 const xuRescan = document.getElementById("xu-rescan");
+const gpioPanel = document.getElementById("gpio-panel");
+const gpioStatus = document.getElementById("gpio-status");
+let gpioButtonsBuilt = false;
 
 let state = null;
 let debounceTimers = new Map();
@@ -38,7 +42,33 @@ function reloadPreview() {
 function renderDeviceInfo(data) {
   const info = data.info;
   const fmt = data.format;
-  deviceInfo.textContent = `${info.card} · ${info.device} · ${fmt.width}x${fmt.height} ${fmt.pixel_format}`;
+  const ids = info.bus_info ? ` · ${info.bus_info}` : "";
+  deviceInfo.textContent = `${info.card} · ${info.device}${ids} · ${fmt.width}x${fmt.height} ${fmt.pixel_format}`;
+}
+
+function renderDeviceSelect(devices, activeDevice) {
+  const prev = deviceSelect.value;
+  deviceSelect.innerHTML = "";
+  if (!devices?.length) {
+    const opt = document.createElement("option");
+    opt.textContent = "Keine Kamera";
+    deviceSelect.appendChild(opt);
+    deviceSelect.disabled = true;
+    return;
+  }
+  deviceSelect.disabled = devices.length < 2;
+  for (const dev of devices) {
+    const opt = document.createElement("option");
+    opt.value = dev.device;
+    const usb = dev.usb_id ? ` [${dev.usb_id}]` : "";
+    const sonix = dev.is_sonix ? " · Sonix" : "";
+    opt.textContent = `${dev.device} — ${dev.card || dev.name}${usb}${sonix}`;
+    if (dev.device === activeDevice) opt.selected = true;
+    deviceSelect.appendChild(opt);
+  }
+  if (prev && prev !== activeDevice && [...deviceSelect.options].some((o) => o.value === prev)) {
+    deviceSelect.value = prev;
+  }
 }
 
 function renderFormats(formats, stream) {
@@ -152,6 +182,69 @@ async function setXuControl(ctrl, valueBytes) {
   await refresh(false);
 }
 
+function formatGpio(gpio) {
+  return `En=0x${gpio.enable.toString(16).padStart(2, "0")} Out=0x${gpio.output.toString(16).padStart(2, "0")} In=0x${gpio.input.toString(16).padStart(2, "0")}`;
+}
+
+function setGpioStatus(text, ok = true) {
+  gpioStatus.textContent = text;
+  gpioStatus.className = `hint gpio-status ${ok ? "ok" : "err"}`;
+}
+
+async function setGpio(enable, output, label = "") {
+  setGpioStatus(`${label || "Sende"} …`, true);
+  try {
+    const gpio = await api("/api/gpio", {
+      method: "PATCH",
+      body: JSON.stringify({ enable, output }),
+    });
+    if (state) state.gpio = gpio;
+    renderGpio(gpio, false);
+    setGpioStatus(`${label || "GPIO"} → ${formatGpio(gpio)}`, true);
+  } catch (err) {
+    console.error(err);
+    setGpioStatus(err.message || String(err), false);
+  }
+}
+
+function renderGpio(gpio, resetButtons = true) {
+  if (!gpio) {
+    gpioButtonsBuilt = false;
+    gpioPanel.innerHTML = "";
+    gpioPanel.textContent = "GPIO nicht verfügbar (kein Sonix-Chipset).";
+    return;
+  }
+
+  let info = gpioPanel.querySelector(".gpio-info");
+  if (!info || resetButtons) {
+    gpioPanel.innerHTML = "";
+    gpioButtonsBuilt = false;
+    info = document.createElement("code");
+    info.className = "gpio-info";
+    gpioPanel.appendChild(info);
+  }
+  info.textContent = formatGpio(gpio);
+
+  if (gpioButtonsBuilt) return;
+  gpioButtonsBuilt = true;
+
+  const presets = [
+    ["Aus", 0, 0],
+    ["GPIO0", 1, 1],
+    ["GPIO1", 1, 2],
+    ["GPIO2", 1, 4],
+    ["Alle 3 LEDs", 7, 7],
+    ["Enable+Out max", 255, 255],
+  ];
+  for (const [label, en, out] of presets) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = label;
+    btn.addEventListener("click", () => setGpio(en, out, label));
+    gpioPanel.appendChild(btn);
+  }
+}
+
 function renderXuControls(controls) {
   xuControls.innerHTML = "";
   if (!controls?.length) {
@@ -164,12 +257,12 @@ function renderXuControls(controls) {
     card.className = "xu-card";
 
     const title = document.createElement("h3");
-    title.textContent = ctrl.id;
+    title.textContent = `${ctrl.label} (${ctrl.id})`;
     card.appendChild(title);
 
     const meta = document.createElement("div");
     meta.className = "xu-meta";
-    meta.textContent = `${ctrl.size} Byte · ${ctrl.writable ? "schreibbar" : "nur lesen"} · ${ctrl.value_hex}`;
+    meta.textContent = `${ctrl.size} Byte · ${ctrl.protocol} · ${ctrl.value_hex}`;
     card.appendChild(meta);
 
     if (ctrl.writable && ctrl.size <= 16) {
@@ -187,7 +280,6 @@ function renderXuControls(controls) {
         input.min = 0;
         input.max = 255;
         input.value = val;
-        input.disabled = !ctrl.writable;
         input.addEventListener("change", async () => {
           const next = inputs.map((el) => Number(el.value) & 255);
           try {
@@ -203,24 +295,6 @@ function renderXuControls(controls) {
         inputs.push(input);
       });
       card.appendChild(bytesWrap);
-
-      if (ctrl.id === "u4_s2") {
-        const actions = document.createElement("div");
-        actions.className = "xu-actions";
-        const presets = [
-          ["Leuchtring aus", [0, 0, 0, 0x0c, 0x15, 0x16, 0x05, 0, 0, 0, 0]],
-          ["Leuchtring max", [3, 0, 1, 0x0c, 0x15, 0x16, 0x05, 0, 0, 0, 0]],
-          ["Leuchtring mittel", [3, 4, 1, 0x0c, 0x15, 0x16, 0x05, 0, 0, 0, 0]],
-        ];
-        for (const [label, bytes] of presets) {
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.textContent = label;
-          btn.addEventListener("click", () => setXuControl(ctrl, bytes));
-          actions.appendChild(btn);
-        }
-        card.appendChild(actions);
-      }
     }
 
     xuControls.appendChild(card);
@@ -237,12 +311,38 @@ function updateRtspUi(stream) {
 async function refresh(reloadVideo = true) {
   if (reloadVideo) startPreview();
   state = await api("/api/camera");
+  renderDeviceSelect(state.devices, state.info.device);
   renderDeviceInfo(state);
   renderFormats(state.formats, state.stream);
   renderControls(state.controls);
+  renderGpio(state.gpio);
   renderXuControls(state.xu_controls);
   updateRtspUi(state.stream);
 }
+
+deviceSelect.addEventListener("change", async () => {
+  const device = deviceSelect.value;
+  if (!device || device === state?.info?.device) return;
+  gpioButtonsBuilt = false;
+  preview.src = "";
+  try {
+    state = await api("/api/device", {
+      method: "POST",
+      body: JSON.stringify({ device }),
+    });
+    renderDeviceSelect(state.devices, state.info.device);
+    renderDeviceInfo(state);
+    renderFormats(state.formats, state.stream);
+    renderControls(state.controls);
+    renderGpio(state.gpio);
+    renderXuControls(state.xu_controls);
+    updateRtspUi(state.stream);
+    reloadPreview();
+  } catch (err) {
+    console.error(err);
+    await refresh(false);
+  }
+});
 
 formatSelect.addEventListener("change", async () => {
   const fmt = JSON.parse(formatSelect.value);

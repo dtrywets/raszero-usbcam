@@ -22,6 +22,7 @@ apt-get update -qq
 apt-get install -y --no-install-recommends \
   ffmpeg \
   v4l-utils \
+  fonts-dejavu-core \
   python3-venv \
   python3-pip \
   curl \
