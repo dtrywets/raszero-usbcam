@@ -28,13 +28,19 @@ apt-get install -y --no-install-recommends \
   ca-certificates
 
 echo "==> MediaMTX ${MEDIAMTX_VERSION} (armv6) installieren"
-ARCHIVE="mediamtx_v${MEDIAMTX_VERSION}_linux_armv6.tar.gz"
-URL="https://github.com/bluenviron/mediamtx/releases/download/v${MEDIAMTX_VERSION}/${ARCHIVE}"
-TMP="/tmp/${ARCHIVE}"
-curl -fsSL "$URL" -o "$TMP"
-tar -xzf "$TMP" -C /tmp mediamtx
-install -m 755 /tmp/mediamtx /usr/local/bin/mediamtx
-rm -f "$TMP" /tmp/mediamtx
+if [[ -x /usr/local/bin/mediamtx ]]; then
+  echo "    bereits installiert: $(/usr/local/bin/mediamtx --version 2>&1 | head -1 || true)"
+else
+  ARCHIVE="mediamtx_v${MEDIAMTX_VERSION}_linux_armv6.tar.gz"
+  URL="https://github.com/bluenviron/mediamtx/releases/download/v${MEDIAMTX_VERSION}/${ARCHIVE}"
+  WORK="/var/tmp/mediamtx-install"
+  rm -rf "$WORK"
+  install -d -m 755 "$WORK"
+  curl -fsSL "$URL" -o "$WORK/${ARCHIVE}"
+  tar -xzf "$WORK/${ARCHIVE}" -C "$WORK" mediamtx
+  install -m 755 "$WORK/mediamtx" /usr/local/bin/mediamtx
+  rm -rf "$WORK"
+fi
 
 echo "==> App nach ${APP_DIR} deployen"
 install -d -m 755 "$APP_DIR"
@@ -46,6 +52,7 @@ install -d -m 755 /etc/raszero-usbcam
 install -m 644 "$REPO_DIR/config/mediamtx.yml" /etc/raszero-usbcam/mediamtx.yml
 
 echo "==> Python venv"
+rm -rf "$APP_DIR/venv"
 python3 -m venv "$APP_DIR/venv"
 "$APP_DIR/venv/bin/pip" install --upgrade pip wheel
 "$APP_DIR/venv/bin/pip" install -r "$APP_DIR/app/requirements.txt"
