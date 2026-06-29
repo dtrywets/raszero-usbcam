@@ -63,7 +63,7 @@ class XUControl:
 
 def _device_sysfs(device: str) -> Path:
     name = Path(device).name
-    return Path(f"/sys/class/video4linux/{name}/device")
+    return Path(f"/sys/class/video4linux/{name}/device").resolve()
 
 
 def usb_ids_for_device(device: str) -> tuple[str, str] | None:
