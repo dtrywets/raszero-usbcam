@@ -71,6 +71,7 @@ async def lifespan(_app: FastAPI):
         preview_fps=15,
     )
     refresh_xu_cache(device)
+    streams.ensure_preview()
     yield
     streams.stop_all()
 
@@ -194,6 +195,7 @@ async def api_rtsp_stop() -> dict:
         set_format(streams.config.device, 640, 480, "MJPG")
     except RuntimeError:
         pass
+    streams.ensure_preview()
     return streams.status()
 
 

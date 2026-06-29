@@ -204,23 +204,21 @@ function renderXuControls(controls) {
       });
       card.appendChild(bytesWrap);
 
-      if (ctrl.id === "u3_s2") {
+      if (ctrl.id === "u4_s2") {
         const actions = document.createElement("div");
         actions.className = "xu-actions";
-        const offBtn = document.createElement("button");
-        offBtn.type = "button";
-        offBtn.textContent = "Leuchtring aus";
-        offBtn.addEventListener("click", () =>
-          setXuControl(ctrl, [0x3c, 0, 0, 0, 0x15, 0x16, 0x05, 0]),
-        );
-        const onBtn = document.createElement("button");
-        onBtn.type = "button";
-        onBtn.textContent = "Leuchtring an";
-        onBtn.addEventListener("click", () =>
-          setXuControl(ctrl, [0x3c, 0, 0x0c, 0x0c, 0x15, 0x16, 0x05, 0]),
-        );
-        actions.appendChild(offBtn);
-        actions.appendChild(onBtn);
+        const presets = [
+          ["Leuchtring aus", [0, 0, 0, 0x0c, 0x15, 0x16, 0x05, 0, 0, 0, 0]],
+          ["Leuchtring max", [3, 0, 1, 0x0c, 0x15, 0x16, 0x05, 0, 0, 0, 0]],
+          ["Leuchtring mittel", [3, 4, 1, 0x0c, 0x15, 0x16, 0x05, 0, 0, 0, 0]],
+        ];
+        for (const [label, bytes] of presets) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = label;
+          btn.addEventListener("click", () => setXuControl(ctrl, bytes));
+          actions.appendChild(btn);
+        }
         card.appendChild(actions);
       }
     }
@@ -237,13 +235,13 @@ function updateRtspUi(stream) {
 }
 
 async function refresh(reloadVideo = true) {
+  if (reloadVideo) startPreview();
   state = await api("/api/camera");
   renderDeviceInfo(state);
   renderFormats(state.formats, state.stream);
   renderControls(state.controls);
   renderXuControls(state.xu_controls);
   updateRtspUi(state.stream);
-  if (reloadVideo) startPreview();
 }
 
 formatSelect.addEventListener("change", async () => {

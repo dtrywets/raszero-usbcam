@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import os
 import signal
 import subprocess
@@ -33,16 +34,127 @@ def ffmpeg_input_format(pixel_format: str) -> str:
     return pixel_format.lower()
 
 
+class PreviewBroadcaster:
+    """Hält ffmpeg dauerhaft warm und verteilt MJPEG an mehrere HTTP-Clients."""
+
+    def __init__(self) -> None:
+        self._proc: subprocess.Popen[bytes] | None = None
+        self._lock = threading.Lock()
+        self._reader: threading.Thread | None = None
+        self._running = False
+        self._latest = collections.deque[bytes](maxlen=48)
+        self._latest_event = threading.Event()
+        self._subscribers: set[asyncio.Queue[bytes | None]] = set()
+        self._input_args: list[str] = []
+
+    def configure(self, input_args: list[str]) -> None:
+        self._input_args = input_args
+
+    @property
+    def active(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def start(self) -> None:
+        with self._lock:
+            if self.active:
+                return
+            if not self._input_args:
+                return
+            cmd = [
+                "ffmpeg",
+                *self._input_args,
+                "-an",
+                "-c:v", "copy",
+                "-f", "mpjpeg",
+                "pipe:1",
+            ]
+            self._proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self._running = True
+            self._reader = threading.Thread(target=self._read_loop, daemon=True)
+            self._reader.start()
+
+    def stop(self) -> None:
+        with self._lock:
+            self._running = False
+            proc = self._proc
+            self._proc = None
+        if proc and proc.poll() is None:
+            proc.send_signal(signal.SIGTERM)
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=2)
+        if self._reader and self._reader.is_alive():
+            self._reader.join(timeout=2)
+        self._reader = None
+        self._notify(None)
+
+    def _read_loop(self) -> None:
+        proc = self._proc
+        if proc is None or proc.stdout is None:
+            return
+        try:
+            while self._running and proc.poll() is None:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                with self._lock:
+                    self._latest.append(chunk)
+                    self._latest_event.set()
+                self._notify(chunk)
+        finally:
+            self._running = False
+
+    def _notify(self, chunk: bytes | None) -> None:
+        for queue in list(self._subscribers):
+            try:
+                queue.put_nowait(chunk)
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    queue.put_nowait(chunk)
+                except asyncio.QueueFull:
+                    pass
+
+    async def subscribe(self):
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=32)
+        self._subscribers.add(queue)
+
+        with self._lock:
+            for chunk in self._latest:
+                try:
+                    queue.put_nowait(chunk)
+                except asyncio.QueueFull:
+                    break
+
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                yield chunk
+        finally:
+            self._subscribers.discard(queue)
+
+
 class StreamManager:
     def __init__(self, config: StreamConfig | None = None) -> None:
         self.config = config or StreamConfig()
-        self._preview_proc: subprocess.Popen[bytes] | None = None
+        self._preview = PreviewBroadcaster()
         self._rtsp_proc: subprocess.Popen[bytes] | None = None
         self._lock = threading.Lock()
 
     @property
     def preview_active(self) -> bool:
-        return self._preview_proc is not None and self._preview_proc.poll() is None
+        return self._preview.active
 
     @property
     def rtsp_active(self) -> bool:
@@ -66,7 +178,9 @@ class StreamManager:
             "-i", cfg.device,
         ]
 
-    def _stop(self, proc: subprocess.Popen[bytes] | None) -> None:
+    def _stop_rtsp(self) -> None:
+        proc = self._rtsp_proc
+        self._rtsp_proc = None
         if proc is None or proc.poll() is not None:
             return
         proc.send_signal(signal.SIGTERM)
@@ -76,59 +190,29 @@ class StreamManager:
             proc.kill()
             proc.wait(timeout=2)
 
+    def ensure_preview(self) -> None:
+        if self.rtsp_active:
+            return
+        self._preview.configure(self._input_args(preview=True))
+        self._preview.start()
+
     def stop_preview(self) -> None:
-        with self._lock:
-            self._stop(self._preview_proc)
-            self._preview_proc = None
+        self._preview.stop()
 
     def stop_rtsp(self) -> None:
         with self._lock:
-            self._stop(self._rtsp_proc)
-            self._rtsp_proc = None
+            self._stop_rtsp()
 
     def stop_all(self) -> None:
         with self._lock:
-            self._stop(self._preview_proc)
-            self._preview_proc = None
-            self._stop(self._rtsp_proc)
-            self._rtsp_proc = None
-
-    def start_preview(self) -> subprocess.Popen[bytes]:
-        with self._lock:
-            if self._preview_proc and self._preview_proc.poll() is None:
-                return self._preview_proc
-            self._stop(self._preview_proc)
-            self._preview_proc = None
-            cmd = [
-                "ffmpeg",
-                *self._input_args(preview=True),
-                "-an",
-                "-c:v", "copy",
-                "-f", "mpjpeg",
-                "pipe:1",
-            ]
-            self._preview_proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            return self._preview_proc
-
-    def preview_error(self) -> str:
-        proc = self._preview_proc
-        if proc is None or proc.stderr is None:
-            return ""
-        return proc.stderr.read().decode(errors="replace").strip()
+            self.stop_preview()
+            self._stop_rtsp()
 
     def start_rtsp(self) -> subprocess.Popen[bytes]:
         with self._lock:
             if self._rtsp_proc and self._rtsp_proc.poll() is None:
                 return self._rtsp_proc
-            # Stop preview if camera may be exclusive
-            if self.preview_active:
-                self._stop(self._preview_proc)
-                self._preview_proc = None
-
+            self.stop_preview()
             cmd = [
                 "ffmpeg",
                 *self._input_args(preview=False),
@@ -147,30 +231,22 @@ class StreamManager:
 
     def update_config(self, **kwargs: object) -> None:
         with self._lock:
+            restart_preview = False
             for key, value in kwargs.items():
                 if hasattr(self.config, key) and value is not None:
                     setattr(self.config, key, value)
-            if self.preview_active or self.rtsp_active:
+                    if key.startswith("preview_"):
+                        restart_preview = True
+            if self.rtsp_active:
                 self.stop_all()
+            elif restart_preview and self.preview_active:
+                self.stop_preview()
 
     async def mjpeg_generator(self):
-        """Yield MJPEG chunks for HTTP streaming."""
-        proc = self.start_preview()
-        assert proc.stdout is not None
-        try:
-            await asyncio.sleep(0.3)
-            while True:
-                if proc.poll() is not None:
-                    break
-                chunk = await asyncio.to_thread(proc.stdout.read, 65536)
-                if not chunk:
-                    if proc.poll() is not None:
-                        break
-                    await asyncio.sleep(0.05)
-                    continue
-                yield chunk
-        finally:
-            self.stop_preview()
+        """Clients hängen an dauerhaft laufendem ffmpeg."""
+        self.ensure_preview()
+        async for chunk in self._preview.subscribe():
+            yield chunk
 
     def status(self) -> dict:
         cfg = self.config
@@ -186,5 +262,7 @@ class StreamManager:
             "preview_height": cfg.preview_height,
             "preview_fps": cfg.preview_fps,
             "rtsp_url": cfg.rtsp_url,
-            "rtsp_public_url": cfg.rtsp_url.replace("127.0.0.1", os.environ.get("RASZERO_HOST", "raszero")),
+            "rtsp_public_url": cfg.rtsp_url.replace(
+                "127.0.0.1", os.environ.get("RASZERO_HOST", "raszero")
+            ),
         }
