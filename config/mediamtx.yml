@@ -1,0 +1,20 @@
+# MediaMTX config for RasZero USB cam RTSP relay
+logLevel: info
+logDestinations: [stdout]
+
+api: false
+metrics: false
+pprof: false
+
+rtsp: true
+rtspAddress: :8554
+rtspTransports: [tcp]
+
+rtmp: false
+hls: false
+webrtc: false
+srt: false
+
+paths:
+  cam:
+    source: publisher

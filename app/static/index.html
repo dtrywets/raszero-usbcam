@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RasZero USB Cam</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>RasZero USB Cam</h1>
+    <p id="device-info">Lade Kamera …</p>
+  </header>
+
+  <main>
+    <section class="preview-panel">
+      <div class="preview-wrap">
+        <img id="preview" alt="Live-Vorschau" src="/preview.mjpg">
+      </div>
+      <div class="stream-actions">
+        <label>
+          Auflösung
+          <select id="format-select"></select>
+        </label>
+        <button id="rtsp-toggle" type="button">RTSP starten</button>
+        <code id="rtsp-url"></code>
+      </div>
+    </section>
+
+    <section class="controls-panel">
+      <h2>Kamera-Parameter</h2>
+      <form id="controls-form"></form>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
